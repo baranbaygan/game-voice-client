@@ -1,7 +1,7 @@
 const LiveKit = require('livekit-client');
 const { ipcRenderer } = require('electron');
 
-const serverUrl = 'ws://192.168.0.37:7880';
+const serverUrl = 'ws://34.255.115.80:7880';
 const statusEl = document.getElementById('status');
 const connectBtn = document.getElementById('connect');
 const muteBtn = document.getElementById('mute');
