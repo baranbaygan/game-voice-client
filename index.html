@@ -2,30 +2,216 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Game VoIP Client</title>
+    <title>SADO Game Voice</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      body { font-family: sans-serif; padding: 16px; }
-      select, button { margin: 8px 0; }
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --panel-2: #1b1f27;
+        --border: #2a2f3a;
+        --text: #e7ecf3;
+        --muted: #9aa4b2;
+        --accent: #6aa9ff;
+        --accent-2: #4d89e8;
+        --ok: #2ecc71;
+        --warn: #ffb020;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; overflow: hidden;   /* 👈 disables scrollbars */ }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Apple Color Emoji","Segoe UI Emoji";
+        color: var(--text);
+        background: linear-gradient(180deg, #0e1116, #0f1115 120px);
+      }
+
+      .wrap {
+        max-width: 780px;
+        margin: 24px auto 64px;
+        padding: 0 16px;
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: .2px;
+        color: var(--text);
+      }
+      .sub {
+        margin: 0 0 22px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(12, 1fr);
+      }
+      .card {
+        grid-column: span 12;
+        background: linear-gradient(180deg, var(--panel), var(--panel-2));
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 14px 16px;
+        box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      }
+      @media (min-width: 760px) {
+        .card--input  { grid-column: span 6; }
+        .card--output { grid-column: span 6; }
+        .card--session{ grid-column: span 12; }
+      }
+
+      .card h2 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--muted);
+        letter-spacing: .3px;
+        text-transform: uppercase;
+      }
+
+      label {
+        display: block;
+        font-size: 13px;
+        color: var(--muted);
+        margin: 8px 0 6px;
+      }
+
+      select, input[type="range"] {
+        width: 100%;
+        background: #0e1116;
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 14px;
+        outline: none;
+      }
+
+      .row {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 1fr 120px;
+        align-items: center;
+      }
+
+      .gain-line {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: 1fr 56px;
+        align-items: center;
+        margin-top: 8px;
+      }
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--border);
+        background: #0e1116;
+        color: var(--muted);
+        border-radius: 10px;
+        padding: 6px 10px;
+        min-width: 56px;
+        font-size: 12px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      button {
+        appearance: none;
+        border: 1px solid var(--border);
+        color: var(--text);
+        background: #12151b;
+        padding: 10px 14px;
+        border-radius: 12px;
+        font-size: 14px;
+        cursor: pointer;
+        transition: transform .04s ease, background .2s ease, border-color .2s ease;
+      }
+      button:hover { background: #10141a; border-color: #3a4250; }
+      button:active { transform: translateY(1px); }
+      button.primary {
+        background: linear-gradient(180deg, var(--accent), var(--accent-2));
+        border: none;
+        color: white;
+      }
+      button.primary:disabled {
+        opacity: .6;
+        cursor: not-allowed;
+      }
+      .status {
+        font-size: 13px;
+        color: var(--muted);
+        padding: 8px 0 0;
+      }
+
+      .options {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .options input[type="checkbox"] { transform: translateY(1px); }
+
+      /* version badge built in renderer.js appears bottom-right; leave room */
+      .footer-space { height: 32px; }
     </style>
   </head>
-  <body>
-    <h2>Game VoIP Client</h2>
-    <div>
-      <label>Microphone:
-        <select id="micSelect"></select>
-      </label>
-    </div>
-    <div>
-      <label>Speaker / Output:
-        <select id="speakerSelect"></select>
-      </label>
-    </div>
-    <div>
-      <button id="connect">Connect</button>
-      <button id="mute" disabled>Mute / Unmute</button>
-    </div>
-    <p id="status">Disconnected</p>
 
-    <script type="module" src="renderer.js"></script>
+  <body>
+    <div class="wrap">
+      <h1>SADO Game Voice</h1>
+      <p class="sub">Lightweight party voice. Pick your devices, set your level, and connect.</p>
+
+      <div class="grid">
+        <!-- Microphone -->
+        <section class="card card--input">
+          <h2>Microphone</h2>
+          <label for="micSelect">Input device</label>
+          <select id="micSelect"></select>
+
+          <div class="gain-line">
+            <label for="micGain" style="margin:0;">Mic level</label>
+            <span id="micGainVal" class="tag">100%</span>
+          </div>
+          <input id="micGain" type="range" min="0" max="200" value="100" />
+        </section>
+
+        <!-- Speaker -->
+        <section class="card card--output">
+          <h2>Speaker</h2>
+          <label for="speakerSelect">Output device</label>
+          <select id="speakerSelect"></select>
+        </section>
+
+        <!-- Session -->
+        <section class="card card--session">
+          <h2>Session</h2>
+          <div class="row" style="margin-bottom:12px;">
+            <div class="actions">
+              <button id="connect" class="primary">Connect</button>
+              <button id="mute">Mute / Unmute</button>
+            </div>
+            <div class="options">
+              <label><input type="checkbox" id="autoConnect"> Auto-connect</label>
+            </div>
+          </div>
+          <div id="status" class="status">Disconnected</div>
+        </section>
+      </div>
+
+      <div class="footer-space"></div>
+    </div>
+
+    <!-- Your renderer.js already wires all IDs used above -->
+    <script src="renderer.js"></script>
   </body>
 </html>

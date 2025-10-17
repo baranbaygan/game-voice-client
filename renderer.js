@@ -1,153 +1,263 @@
+// renderer.js
+// Requires: nodeIntegration: true (dev)
+// Main process must expose IPC handlers: getToken, getSetting, setSetting, getAppVersion
+
 const LiveKit = require('livekit-client');
 const { ipcRenderer } = require('electron');
 
-const serverUrl = 'ws://34.255.115.80:7880';
-const statusEl = document.getElementById('status');
-const connectBtn = document.getElementById('connect');
-const muteBtn = document.getElementById('mute');
-const micSelect = document.getElementById('micSelect');
-const speakerSelect = document.getElementById('speakerSelect');
+const serverUrl   = 'ws://34.255.115.80:7880';
+
+// UI elements
+const statusEl    = document.getElementById('status');
+const connectBtn  = document.getElementById('connect');
+const muteBtn     = document.getElementById('mute');
+const micSelect   = document.getElementById('micSelect');
+const spkSelect   = document.getElementById('speakerSelect');
+const micGain     = document.getElementById('micGain');
+const micGainVal  = document.getElementById('micGainVal');
+const autoChk     = document.getElementById('autoConnect'); // <-- NEW
 
 let room;
-let localTrack;
+let localTrack;          // LiveKit LocalAudioTrack we publish
+let rawStream;           // Raw getUserMedia stream
+let processedStream;     // Stream after WebAudio gain
+let audioCtx;
+let sourceNode;
+let gainNode;
+let destNode;
 
-function log(msg, ...args) {
-  console.log('[renderer]', msg, ...args);
+let connecting = false;
+let reconnectTimer = null;
+
+function log(...a){ console.log('[renderer]', ...a); }
+function clearReconnectTimer(){ if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } }
+
+// ---------- Settings persistence ----------
+async function loadSavedMicGain() {
+  try {
+    const saved = await ipcRenderer.invoke('getSetting', 'micGainPercent');
+    if (typeof saved === 'number' && !Number.isNaN(saved)) {
+      micGain.value = String(saved);
+      micGainVal.textContent = `${saved}%`;
+      if (gainNode) gainNode.gain.value = Math.max(0, saved / 100);
+      return saved;
+    }
+  } catch {}
+  micGain.value = '100';
+  micGainVal.textContent = '100%';
+  return 100;
+}
+async function saveMicGain(pct) {
+  try { await ipcRenderer.invoke('setSetting', { key: 'micGainPercent', value: pct }); }
+  catch (e) { console.warn('saving micGain failed', e); }
 }
 
-// Populate mic & speaker device dropdowns
+async function loadSavedAutoConnect() {
+  try {
+    const val = await ipcRenderer.invoke('getSetting', 'autoConnect');
+    const on = !!val;
+    autoChk.checked = on;
+    return on;
+  } catch {
+    autoChk.checked = false;
+    return false;
+  }
+}
+async function saveAutoConnect(on) {
+  try { await ipcRenderer.invoke('setSetting', { key: 'autoConnect', value: !!on }); }
+  catch (e) { console.warn('saving autoConnect failed', e); }
+}
+
+// ---------- Devices ----------
 async function populateDeviceLists() {
   try {
-    // Ask for mic permission first (so labels appear)
-    await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (err) {
-    console.warn('Could not get mic permission when enumerating devices:', err);
+    await navigator.mediaDevices.getUserMedia({ audio: true }); // to show labels
+  } catch (e) {
+    log('getUserMedia preflight (labels) failed (ok on first run):', e?.message || e);
   }
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    log('Devices enumerated:', devices);
-    const mics = devices.filter(d => d.kind === 'audioinput');
-    const outputs = devices.filter(d => d.kind === 'audiooutput');
 
-    micSelect.innerHTML = '';
-    speakerSelect.innerHTML = '';
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  log('Devices:', devices);
 
-    mics.forEach(d => {
-      const opt = document.createElement('option');
-      opt.value = d.deviceId;
-      opt.text = d.label || `Mic (${d.deviceId})`;
-      micSelect.appendChild(opt);
-    });
+  const mics = devices.filter(d => d.kind === 'audioinput');
+  const outs = devices.filter(d => d.kind === 'audiooutput');
 
-    outputs.forEach(d => {
-      const opt = document.createElement('option');
-      opt.value = d.deviceId;
-      opt.text = d.label || `Speaker (${d.deviceId})`;
-      speakerSelect.appendChild(opt);
-    });
-  } catch (err) {
-    console.error('Error enumerating devices:', err);
-  }
+  micSelect.innerHTML = '';
+  spkSelect.innerHTML = '';
+
+  mics.forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.text  = d.label || `Mic ${d.deviceId}`;
+    micSelect.appendChild(opt);
+  });
+
+  outs.forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.text  = d.label || `Speaker ${d.deviceId}`;
+    spkSelect.appendChild(opt);
+  });
 }
 
-// Instrumented connect logic
+// ---------- WebAudio graph (Mic -> Gain -> Destination) ----------
+function buildAudioGraph(stream, initialGain = 1.0) {
+  try { sourceNode && sourceNode.disconnect(); } catch {}
+  try { gainNode && gainNode.disconnect(); } catch {}
+  try { destNode  && destNode.disconnect(); } catch {}
+  try { audioCtx  && audioCtx.close(); } catch {}
+
+  audioCtx   = new (window.AudioContext || window.webkitAudioContext)();
+  sourceNode = audioCtx.createMediaStreamSource(stream);
+  gainNode   = audioCtx.createGain();
+  gainNode.gain.value = initialGain;
+  destNode   = audioCtx.createMediaStreamDestination();
+
+  sourceNode.connect(gainNode);
+  gainNode.connect(destNode);
+
+  processedStream = destNode.stream;
+  return processedStream.getAudioTracks()[0];
+}
+
+// Create & publish processed track (with selected mic + slider gain)
+async function publishProcessedTrack(deviceId, gainPercent) {
+  const constraints = {
+    audio: {
+      deviceId: deviceId || undefined,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: false, // we control gain with WebAudio
+    }
+  };
+
+  rawStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+  const linearGain = Math.max(0, (gainPercent ?? 100) / 100);
+  const processedTrack = buildAudioGraph(rawStream, linearGain);
+
+  let lkTrack;
+  if (LiveKit.LocalAudioTrack && typeof LiveKit.LocalAudioTrack === 'function') {
+    lkTrack = new LiveKit.LocalAudioTrack(processedTrack);
+  } else {
+    throw new Error('This SDK version cannot build LocalAudioTrack from a MediaStreamTrack.');
+  }
+
+  if (localTrack) {
+    try {
+      await room.localParticipant.unpublishTrack(localTrack);
+      localTrack.stop();
+    } catch (e) { log('unpublish old track error:', e); }
+  }
+
+  localTrack = lkTrack;
+  await room.localParticipant.publishTrack(localTrack);
+  log('Published processed mic (gain linear =', linearGain, ')');
+}
+
+// ---------- Reconnect logic ----------
+function scheduleReconnect(attempt = 1) {
+  if (!autoChk.checked) return;
+  clearReconnectTimer();
+  const delay = Math.min(30000, 1000 * Math.pow(2, attempt)); // 1s,2s,4s,...30s
+  const secs = Math.round(delay / 1000);
+  statusEl.textContent = `Reconnecting in ${secs}s (attempt ${attempt})...`;
+  log(`Scheduling reconnect in ${secs}s (attempt ${attempt})`);
+
+  reconnectTimer = setTimeout(async () => {
+    try {
+      await connectRoom(); // will request a fresh token each time
+      log('Reconnected via manual backoff');
+    } catch (e) {
+      log('Reconnect attempt failed:', e?.message || e);
+      scheduleReconnect(attempt + 1);
+    }
+  }, delay);
+}
+
+// ---------- Connect flow ----------
 async function connectRoom() {
+  if (connecting) {
+    log('connectRoom ignored (already connecting)');
+    return;
+  }
+  connecting = true;
+  clearReconnectTimer();
+
   try {
     connectBtn.disabled = true;
-    statusEl.textContent = 'Generating token...';
     const identity = 'Player' + Math.floor(Math.random() * 1000);
     const roomName = 'test';
+
+    statusEl.textContent = 'Generating token...';
     const token = await ipcRenderer.invoke('getToken', { identity, roomName });
 
     statusEl.textContent = 'Connecting...';
-    log('Connecting to room', serverUrl, 'as', identity, 'in room', roomName);
+    log('Connecting', { serverUrl, identity, roomName });
 
     room = new LiveKit.Room();
-    // Instrument events
+
+    // Events
     room.on(LiveKit.RoomEvent.Connected, () => {
       log('RoomEvent: Connected');
       statusEl.textContent = 'Connected';
+      clearReconnectTimer();
     });
+
+    room.on(LiveKit.RoomEvent.Reconnecting, () => {
+      log('RoomEvent: Reconnecting');
+      statusEl.textContent = 'Reconnecting...';
+    });
+
+    room.on(LiveKit.RoomEvent.Reconnected, () => {
+      log('RoomEvent: Reconnected');
+      statusEl.textContent = 'Connected';
+    });
+
     room.on(LiveKit.RoomEvent.Disconnected, () => {
       log('RoomEvent: Disconnected');
       statusEl.textContent = 'Disconnected';
       connectBtn.disabled = false;
       muteBtn.disabled = true;
+      scheduleReconnect(1);
     });
+
     room.on(LiveKit.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-      log('RoomEvent: TrackSubscribed', participant.identity, publication.kind, track.sid);
+      log('RoomEvent: TrackSubscribed', { from: participant.identity, kind: publication.kind, sid: track.sid });
       try {
-        const el = track.attach();  // returns an `<audio>` element for audio
+        const el = track.attach();
         el.style.display = 'none';
         document.body.appendChild(el);
-        log('Attached track element to DOM', el);
-      } catch (attachErr) {
-        console.error('Error attaching track:', attachErr);
-      }
+      } catch (e) { console.error('Attach error:', e); }
     });
-    room.on(LiveKit.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
-      log('RoomEvent: TrackUnsubscribed', participant.identity, publication.kind, track.sid);
+
+    room.on(LiveKit.RoomEvent.TrackUnsubscribed, (track) => {
+      log('RoomEvent: TrackUnsubscribed', track.sid);
       try {
-        track.detach().forEach(el => {
-          if (el.parentNode) el.parentNode.removeChild(el);
-        });
-      } catch (detachErr) {
-        console.warn('Error detaching track elements:', detachErr);
-      }
+        track.detach().forEach(el => el.parentNode && el.parentNode.removeChild(el));
+      } catch (e) { console.warn('Detach error:', e); }
     });
-    room.on(LiveKit.RoomEvent.AudioPlaybackStatusChanged, () => {
-      log('RoomEvent: AudioPlaybackStatusChanged, room.canPlaybackAudio =', room.canPlaybackAudio);
-      // If playback is blocked (canPlaybackAudio = false), prompt user to call startAudio
+
+    room.on(LiveKit.RoomEvent.AudioPlaybackStatusChanged, async () => {
+      log('RoomEvent: AudioPlaybackStatusChanged; canPlaybackAudio =', room.canPlaybackAudio);
       if (!room.canPlaybackAudio) {
-        log('Audio playback is blocked. Need user gesture to start audio.');
-        // Show a button to allow audio:
-        const btn = document.createElement('button');
-        btn.innerText = 'Enable Audio';
-        btn.onclick = async () => {
-          try {
-            await room.startAudio();
-            log('room.startAudio succeeded');
-            btn.remove();
-          } catch (e) {
-            console.error('room.startAudio failed:', e);
-          }
-        };
-        document.body.appendChild(btn);
+        try { await room.startAudio(); } catch (e) { log('startAudio failed', e); }
       }
     });
-    room.on(LiveKit.RoomEvent.MediaDevicesError, error => {
-      log('RoomEvent: MediaDevicesError', error);
+
+    room.on(LiveKit.RoomEvent.MediaDevicesError, (err) => {
+      log('RoomEvent: MediaDevicesError', err);
     });
 
     await room.connect(serverUrl, token, { autoSubscribe: true });
-    log('Connected: after await room.connect');
+    log('Connected to LiveKit');
 
-    // Create local audio track using chosen mic
-    const micDeviceId = micSelect.value;
-    log('Creating local audio track with mic deviceId:', micDeviceId);
-    localTrack = await LiveKit.createLocalAudioTrack({
-      deviceId: micDeviceId,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    });
-    log('Local audio track created:', localTrack);
+    const initialPct = parseInt(micGain.value, 10) || 100;
+    await publishProcessedTrack(micSelect.value, initialPct);
 
-    await room.localParticipant.publishTrack(localTrack);
-    log('Published local audio track');
-
-    // Attempt to set output device / speaker if API available
-    const speakerDeviceId = speakerSelect.value;
-    log('Setting speaker/output device to:', speakerDeviceId);
-    if (speakerDeviceId && typeof room.setAudioOutputDevice === 'function') {
-      try {
-        await room.setAudioOutputDevice(speakerDeviceId);
-        log('Successfully set audio output device');
-      } catch (err) {
-        console.warn('Failed to set audio output device:', err);
-      }
-    } else {
-      log('No room.setAudioOutputDevice API or no speaker selection');
+    if (spkSelect.value && typeof room.setAudioOutputDevice === 'function') {
+      try { await room.setAudioOutputDevice(spkSelect.value); }
+      catch (e) { log('setAudioOutputDevice failed:', e?.message || e); }
     }
 
     statusEl.textContent = `Connected as ${identity} in room "${roomName}"`;
@@ -155,33 +265,90 @@ async function connectRoom() {
 
   } catch (err) {
     console.error('connectRoom error:', err);
-    statusEl.textContent = 'Error: ' + (err.message || err);
+    statusEl.textContent = 'Error: ' + (err?.message || err);
     connectBtn.disabled = false;
+    // If autoConnect is on, schedule retries
+    scheduleReconnect(1);
+    throw err; // so caller can chain retries if needed
+  } finally {
+    connecting = false;
   }
 }
 
+// ---------- UI handlers ----------
 connectBtn.addEventListener('click', async () => {
-  log('Connect button clicked');
+  log('Connect clicked');
   await connectRoom();
 });
 
 muteBtn.addEventListener('click', async () => {
   if (!localTrack) {
-    log('Mute toggled but no localTrack exists');
+    log('Mute clicked but no localTrack');
     return;
   }
   if (localTrack.isMuted) {
     await localTrack.unmute();
-    log('Unmuted localTrack');
     statusEl.textContent = 'Mic on';
+    log('Local mic unmuted');
   } else {
     await localTrack.mute();
-    log('Muted localTrack');
     statusEl.textContent = 'Mic off';
+    log('Local mic muted');
   }
 });
 
-// On startup, populate devices
-populateDeviceLists().catch(err => {
-  console.error('populateDeviceLists error:', err);
+micGain.addEventListener('input', async () => {
+  const pct = parseInt(micGain.value, 10);
+  micGainVal.textContent = `${pct}%`;
+  if (gainNode) gainNode.gain.value = Math.max(0, pct / 100);
+  await saveMicGain(pct);
 });
+
+micSelect.addEventListener('change', async () => {
+  if (!room) return;
+  try {
+    const pct = parseInt(micGain.value, 10) || 100;
+    await publishProcessedTrack(micSelect.value, pct);
+    log('Mic switched to', micSelect.value);
+  } catch (e) { console.error('Mic switch failed:', e); }
+});
+
+spkSelect.addEventListener('change', async () => {
+  if (!room || typeof room.setAudioOutputDevice !== 'function') return;
+  try { await room.setAudioOutputDevice(spkSelect.value); log('Speaker switched to', spkSelect.value); }
+  catch (e) { console.error('Speaker switch failed:', e); }
+});
+
+autoChk.addEventListener('change', async () => {
+  await saveAutoConnect(autoChk.checked);
+  if (autoChk.checked && !room) {
+    // Optionally connect immediately when toggled on
+    connectRoom().catch(() => {});
+  }
+});
+
+// ---------- Init ----------
+(async () => {
+  await populateDeviceLists().catch(e => log('populateDeviceLists error:', e));
+  await loadSavedMicGain().catch(() => {});
+  const autoOn = await loadSavedAutoConnect();
+
+  // Version badge
+  try {
+    const version = await ipcRenderer.invoke('getAppVersion');
+    const badge = document.createElement('div');
+    badge.textContent = `v${version}`;
+    Object.assign(badge.style, {
+      position: 'fixed', bottom: '8px', right: '10px',
+      padding: '2px 6px', fontSize: '11px', fontFamily: 'system-ui, sans-serif',
+      color: '#555', background: '#f2f2f2', border: '1px solid #ddd',
+      borderRadius: '6px', opacity: '0.9', pointerEvents: 'none', zIndex: 9999,
+    });
+    document.body.appendChild(badge);
+  } catch (e) { console.warn('Could not fetch app version:', e); }
+
+  // Auto-connect after a short delay (let device lists/gain initialize)
+  if (autoOn) {
+    setTimeout(() => { connectRoom().catch(() => scheduleReconnect(1)); }, 300);
+  }
+})();
