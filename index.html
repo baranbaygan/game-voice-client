@@ -2,19 +2,30 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Game VoIP</title>
+    <title>Game VoIP Client</title>
     <style>
-      body { font-family: system-ui, sans-serif; padding: 16px; }
-      button { margin-right: 8px; }
+      body { font-family: sans-serif; padding: 16px; }
+      select, button { margin: 8px 0; }
     </style>
   </head>
   <body>
     <h2>Game VoIP Client</h2>
     <div>
+      <label>Microphone:
+        <select id="micSelect"></select>
+      </label>
+    </div>
+    <div>
+      <label>Speaker / Output:
+        <select id="speakerSelect"></select>
+      </label>
+    </div>
+    <div>
       <button id="connect">Connect</button>
       <button id="mute" disabled>Mute / Unmute</button>
     </div>
     <p id="status">Disconnected</p>
-    <script src="renderer.js"></script>
+
+    <script type="module" src="renderer.js"></script>
   </body>
 </html>
