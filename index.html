@@ -151,6 +151,13 @@
         padding: 8px 0 0;
       }
 
+      #channelSelect {
+        min-width: 50px;
+        width: auto;
+        padding: 6px 10px;
+      }
+
+
       .options {
         display: flex;
         align-items: center;
@@ -202,6 +209,10 @@
             </div>
             <div class="options">
               <label><input type="checkbox" id="autoConnect"> Auto-connect</label>
+              <label style="margin-left:8px;">
+                Channel
+                <select id="channelSelect"></select>
+              </label>
             </div>
           </div>
           <div id="status" class="status">Disconnected</div>

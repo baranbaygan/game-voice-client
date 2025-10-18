@@ -32,6 +32,40 @@ let reconnectTimer = null;
 function log(...a){ console.log('[renderer]', ...a); }
 function clearReconnectTimer(){ if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } }
 
+function roomNameFromChannel() {
+  const ch = channelSelect?.value || '1';
+  return `ch-${ch}`;
+}
+
+function populateChannels() {
+  if (!channelSelect) return;
+  channelSelect.innerHTML = '';
+  for (let i = 1; i <= 8; i++) {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.text = `${i}`;
+    channelSelect.appendChild(opt);
+  }
+  // default to 1 if nothing persisted
+  if (!channelSelect.value) channelSelect.value = '1';
+}
+
+// optional: media cleanup when switching channels
+async function cleanupLocalMedia() {
+  try { if (localTrack) { await localTrack.mute().catch(()=>{}); localTrack.stop(); } } catch {}
+  try { rawStream?.getTracks().forEach(t => t.stop()); } catch {}
+  try { processedStream?.getTracks().forEach(t => t.stop()); } catch {}
+  try { sourceNode && sourceNode.disconnect(); } catch {}
+  try { gainNode && gainNode.disconnect(); } catch {}
+  try { destNode && destNode.disconnect(); } catch {}
+  try { audioCtx && audioCtx.close(); } catch {}
+  localTrack = null;
+  rawStream = null;
+  processedStream = null;
+  sourceNode = gainNode = destNode = undefined;
+  audioCtx = undefined;
+}
+
 // ---------- Settings persistence ----------
 async function loadSavedMicGain() {
   try {
@@ -187,7 +221,7 @@ async function connectRoom() {
   try {
     connectBtn.disabled = true;
     const identity = 'Player' + Math.floor(Math.random() * 1000);
-    const roomName = 'test';
+    const roomName = roomNameFromChannel();
 
     statusEl.textContent = 'Generating token...';
     const token = await ipcRenderer.invoke('getToken', { identity, roomName });
@@ -276,6 +310,29 @@ async function connectRoom() {
 }
 
 // ---------- UI handlers ----------
+
+channelSelect.addEventListener('change', async () => {
+  // If not connected yet and auto-connect is on, just connect.
+  if (!room) {
+    if (autoChk?.checked) connectRoom().catch(()=>{});
+    return;
+  }
+
+  // Switch: cleanly leave current room, then join the new one
+  try {
+    statusEl.textContent = `Switching to ${roomNameFromChannel()}...`;
+    await cleanupLocalMedia();
+    await room.disconnect(true); // true = stop all local tracks
+  } catch (_) {}
+  room = null;
+  connectBtn.disabled = true;
+  try {
+    await connectRoom();
+  } finally {
+    connectBtn.disabled = false;
+  }
+});
+
 connectBtn.addEventListener('click', async () => {
   log('Connect clicked');
   await connectRoom();
@@ -329,6 +386,7 @@ autoChk.addEventListener('change', async () => {
 
 // ---------- Init ----------
 (async () => {
+  populateChannels();
   await populateDeviceLists().catch(e => log('populateDeviceLists error:', e));
   await loadSavedMicGain().catch(() => {});
   const autoOn = await loadSavedAutoConnect();
