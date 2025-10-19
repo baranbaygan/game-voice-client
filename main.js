@@ -11,6 +11,8 @@ const path = require('path');
 
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 
+
+
 function readSettings() {
   try {
     // Print the SETTINGS_PATH for debugging
