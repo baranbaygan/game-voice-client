@@ -5,19 +5,60 @@
 const LiveKit = require('livekit-client');
 const { ipcRenderer } = require('electron');
 
-const serverUrl   = 'ws://34.255.115.80:7880';
+const serverUrl = 'ws://34.255.115.80:7880';
 
 // UI elements
-const statusEl    = document.getElementById('status');
-const connectBtn  = document.getElementById('connect');
-const muteBtn     = document.getElementById('mute');
-const micSelect   = document.getElementById('micSelect');
-const spkSelect   = document.getElementById('speakerSelect');
-const micGain     = document.getElementById('micGain');
-const micGainVal  = document.getElementById('micGainVal');
-const autoChk     = document.getElementById('autoConnect'); // <-- NEW
-const peerList    = document.getElementById('peerList');    // <-- NEW
+const statusEl = document.getElementById('status');
+const connectBtn = document.getElementById('connect');
+const muteBtn = document.getElementById('mute');
+const micSelect = document.getElementById('micSelect');
+const spkSelect = document.getElementById('speakerSelect');
+const micGain = document.getElementById('micGain');
+const micGainVal = document.getElementById('micGainVal');
+const autoChk = document.getElementById('autoConnect'); // <-- NEW
+const peerList = document.getElementById('peerList');    // <-- NEW
 const channelSelect = document.getElementById('channelSelect'); // existed in HTML
+const usernameModal = document.getElementById('usernameModal');
+const usernameInput = document.getElementById('usernameInput');
+const usernameSaveBtn = document.getElementById('usernameSaveBtn');
+const changeModal = document.getElementById('changeUsernameModal');
+const changeInput = document.getElementById('changeUsernameInput');
+const cancelChangeBtn = document.getElementById('cancelChangeBtn');
+const saveChangeBtn = document.getElementById('saveChangeBtn');
+const whoami = document.getElementById('whoami');
+
+if (whoami) {
+  whoami.style.cursor = 'pointer';
+  whoami.title = 'Click to change your username';
+
+  whoami.addEventListener('click', async () => {
+    const oldName = await ipcRenderer.invoke('getSetting', 'username');
+    changeInput.value = oldName || '';
+    changeModal.style.display = 'flex';
+    changeInput.focus();
+  });
+}
+
+cancelChangeBtn.addEventListener('click', () => {
+  changeModal.style.display = 'none';
+});
+
+saveChangeBtn.addEventListener('click', async () => {
+  const newName = changeInput.value.trim();
+  if (newName.length < 2) {
+    changeInput.focus();
+    return;
+  }
+  await ipcRenderer.invoke('setSetting', { key: 'username', value: newName });
+  whoami.textContent = `Signed in as: ${newName}`;
+  changeModal.style.display = 'none';
+
+  // reconnect with new username
+  if (room) {
+    try { await room.disconnect(true); } catch { }
+    connectRoom().catch(() => { });
+  }
+});
 
 let room;
 let localTrack;          // LiveKit LocalAudioTrack we publish
@@ -31,12 +72,48 @@ let destNode;
 let connecting = false;
 let reconnectTimer = null;
 
-function log(...a){ console.log('[renderer]', ...a); }
-function clearReconnectTimer(){ if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } }
+function log(...a) { console.log('[renderer]', ...a); }
+function clearReconnectTimer() { if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } }
+
+let roster = new Map(); // sid -> { sid, identity, isLocal, speaking }
+
+let peerHeartbeat = null;
+function startPeerHeartbeat() {
+  if (peerHeartbeat) return;
+  peerHeartbeat = setInterval(() => {
+    if (!room || room.state === 'disconnected') return;
+    renderPeers();
+  }, 1000); // 1s; cheap and keeps UI honest
+}
+function stopPeerHeartbeat() {
+  if (peerHeartbeat) { clearInterval(peerHeartbeat); peerHeartbeat = null; }
+}
 
 function roomNameFromChannel() {
   const ch = channelSelect?.value || '1';
   return `ch-${ch}`;
+}
+
+async function getOrAskUsername() {
+  let name = await ipcRenderer.invoke('getSetting', 'username');
+  if (name && String(name).trim().length >= 2) return String(name).trim();
+
+  // show modal
+  usernameModal.style.display = 'flex';
+  usernameInput.value = '';
+  usernameInput.focus();
+
+  return await new Promise((resolve) => {
+    const save = async () => {
+      const v = String(usernameInput.value || '').trim();
+      if (v.length < 2) { usernameInput.focus(); return; }
+      await ipcRenderer.invoke('setSetting', { key: 'username', value: v });
+      usernameModal.style.display = 'none';
+      resolve(v);
+    };
+    usernameSaveBtn.onclick = save;
+    usernameInput.onkeydown = (e) => { if (e.key === 'Enter') save(); };
+  });
 }
 
 function populateChannels() {
@@ -53,13 +130,13 @@ function populateChannels() {
 
 // optional: media cleanup when switching channels
 async function cleanupLocalMedia() {
-  try { if (localTrack) { await localTrack.mute().catch(()=>{}); localTrack.stop(); } } catch {}
-  try { rawStream?.getTracks().forEach(t => t.stop()); } catch {}
-  try { processedStream?.getTracks().forEach(t => t.stop()); } catch {}
-  try { sourceNode && sourceNode.disconnect(); } catch {}
-  try { gainNode && gainNode.disconnect(); } catch {}
-  try { destNode && destNode.disconnect(); } catch {}
-  try { audioCtx && audioCtx.close(); } catch {}
+  try { if (localTrack) { await localTrack.mute().catch(() => { }); localTrack.stop(); } } catch { }
+  try { rawStream?.getTracks().forEach(t => t.stop()); } catch { }
+  try { processedStream?.getTracks().forEach(t => t.stop()); } catch { }
+  try { sourceNode && sourceNode.disconnect(); } catch { }
+  try { gainNode && gainNode.disconnect(); } catch { }
+  try { destNode && destNode.disconnect(); } catch { }
+  try { audioCtx && audioCtx.close(); } catch { }
   localTrack = null;
   rawStream = null;
   processedStream = null;
@@ -77,7 +154,7 @@ async function loadSavedMicGain() {
       if (gainNode) gainNode.gain.value = Math.max(0, saved / 100);
       return saved;
     }
-  } catch {}
+  } catch { }
   micGain.value = '100';
   micGainVal.textContent = '100%';
   return 100;
@@ -123,30 +200,30 @@ async function populateDeviceLists() {
   mics.forEach(d => {
     const opt = document.createElement('option');
     opt.value = d.deviceId;
-    opt.text  = d.label || `Mic ${d.deviceId}`;
+    opt.text = d.label || `Mic ${d.deviceId}`;
     micSelect.appendChild(opt);
   });
 
   outs.forEach(d => {
     const opt = document.createElement('option');
     opt.value = d.deviceId;
-    opt.text  = d.label || `Speaker ${d.deviceId}`;
+    opt.text = d.label || `Speaker ${d.deviceId}`;
     spkSelect.appendChild(opt);
   });
 }
 
 // ---------- WebAudio graph (Mic -> Gain -> Destination) ----------
 function buildAudioGraph(stream, initialGain = 1.0) {
-  try { sourceNode && sourceNode.disconnect(); } catch {}
-  try { gainNode && gainNode.disconnect(); } catch {}
-  try { destNode  && destNode.disconnect(); } catch {}
-  try { audioCtx  && audioCtx.close(); } catch {}
+  try { sourceNode && sourceNode.disconnect(); } catch { }
+  try { gainNode && gainNode.disconnect(); } catch { }
+  try { destNode && destNode.disconnect(); } catch { }
+  try { audioCtx && audioCtx.close(); } catch { }
 
-  audioCtx   = new (window.AudioContext || window.webkitAudioContext)();
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   sourceNode = audioCtx.createMediaStreamSource(stream);
-  gainNode   = audioCtx.createGain();
+  gainNode = audioCtx.createGain();
   gainNode.gain.value = initialGain;
-  destNode   = audioCtx.createMediaStreamDestination();
+  destNode = audioCtx.createMediaStreamDestination();
 
   sourceNode.connect(gainNode);
   gainNode.connect(destNode);
@@ -212,61 +289,70 @@ function scheduleReconnect(attempt = 1) {
 
 // ---------- Connected players (render) ----------
 function renderPeers() {
-  try {
-    if (!peerList) return;
+  if (!peerList) return;
+  if (!room) { peerList.innerHTML = ''; return; }
 
-    // No room yet → clear UI
-    if (!room) {
-      peerList.innerHTML = '';
-      return;
-    }
+  // Merge sources of truth:
+  const activeSids = new Set((room.activeSpeakers || [])
+    .map(s => s?.sid || s?.participant?.sid || s?.participantSid || s?.identity)
+    .filter(Boolean));
 
-    // activeSpeakers can be Participant[] or objects with sid/participant
-    const activeSids = new Set(
-      (room.activeSpeakers || [])
-        .map(s => s?.sid || s?.participant?.sid || s?.participantSid || s?.participant?.identity || s?.identity)
-        .filter(Boolean)
-    );
-
-    // room.participants may be:
-    //  - Map<string, RemoteParticipant>
-    //  - Array<RemoteParticipant> (older client builds in some wrappers)
-    //  - undefined (race during early connect / SDK differences)
-    let remoteList = [];
-    if (room.participants && typeof room.participants.forEach === 'function') {
-      // Map-like
-      room.participants.forEach(p => remoteList.push(p));
-    } else if (Array.isArray(room.participants)) {
-      remoteList = room.participants.slice();
-    } else if (room.getParticipants && typeof room.getParticipants === 'function') {
-      // Some versions expose a getter
-      remoteList = room.getParticipants() || [];
-    } else {
-      remoteList = []; // safest fallback
-    }
-
-    function liFor(p, isLocal) {
-      const sid = p?.sid || p?.identity || '';
-      const speaking = activeSids.has(sid);
-      const classes = speaking ? 'speaking' : '';
-      const name = p?.identity ?? 'Unknown';
-      const you = isLocal ? ' (you)' : '';
-      return `<li class="${classes}" data-sid="${sid}">
-        <span class="dot"></span>
-        <span class="name">${name}${you}</span>
-      </li>`;
-    }
-
-    const items = [];
-    if (room.localParticipant) items.push(liFor(room.localParticipant, true));
-    remoteList.forEach(p => items.push(liFor(p, false)));
-
-    peerList.innerHTML = items.join('');
-  } catch (e) {
-    console.warn('renderPeers failed:', e);
-    // Don’t crash UI; just clear list
-    if (peerList) peerList.innerHTML = '';
+  // Seed/refresh from room API (covers remotes that haven't fired recent events)
+  const remotes = [];
+  if (room.participants?.values) {
+    for (const p of room.participants.values()) remotes.push(p);
+  } else if (Array.isArray(room.participants)) {
+    remotes.push(...room.participants);
+  } else if (typeof room.getParticipants === 'function') {
+    remotes.push(...(room.getParticipants() || []));
   }
+
+  // Ensure local is present
+  const lp = room.localParticipant;
+  if (lp) {
+    roster.set(lp.sid, {
+      sid: lp.sid,
+      identity: lp.identity || 'You',
+      isLocal: true,
+      speaking: activeSids.has(lp.sid)
+    });
+  }
+
+  // Ensure remotes are present
+  for (const p of remotes) {
+    const sid = p?.sid;
+    if (!sid) continue;
+    roster.set(sid, {
+      sid,
+      identity: p.identity || sid.slice(0, 6),
+      isLocal: false,
+      speaking: activeSids.has(sid),
+    });
+  }
+
+  // Build DOM
+  const items = [];
+  // local first
+  for (const entry of roster.values()) {
+    if (!entry.isLocal) continue;
+    items.push(`
+      <li class="${entry.speaking ? 'speaking' : ''}" data-sid="${entry.sid}">
+        <span class="dot"></span><span class="name">${entry.identity} (you)</span>
+      </li>`);
+  }
+  // then remotes
+  for (const entry of roster.values()) {
+    if (entry.isLocal) continue;
+    items.push(`
+      <li class="${entry.speaking ? 'speaking' : ''}" data-sid="${entry.sid}">
+        <span class="dot"></span><span class="name">${entry.identity}</span>
+      </li>`);
+  }
+
+  peerList.innerHTML = items.join('');
+
+  // Debug visibility
+  console.log('[peers] roster=', Array.from(roster.values()).map(r => r.identity));
 }
 
 
@@ -281,7 +367,8 @@ async function connectRoom() {
 
   try {
     connectBtn.disabled = true;
-    const identity = 'Player' + Math.floor(Math.random() * 1000);
+    const identity = await getOrAskUsername();
+    if (whoami) whoami.textContent = `Signed in as: ${identity}`;
     const roomName = roomNameFromChannel();
 
     statusEl.textContent = 'Generating token...';
@@ -321,29 +408,65 @@ async function connectRoom() {
     });
 
     // Presence updates:
-    room.on(LiveKit.RoomEvent.ParticipantConnected, () => renderPeers());
-    room.on(LiveKit.RoomEvent.ParticipantDisconnected, () => renderPeers());
-    room.on(LiveKit.RoomEvent.ActiveSpeakersChanged, () => renderPeers());
+    room.on(LiveKit.RoomEvent.ParticipantConnected, (p) => {
+      roster.set(p.sid, { sid: p.sid, identity: p.identity, isLocal: false, speaking: false });
+      renderPeers();
+    });
+    room.on(LiveKit.RoomEvent.ParticipantDisconnected, (p) => {
+      roster.delete(p.sid);
+      renderPeers();
+    });
+
+
+    // Active speakers
+    room.on(LiveKit.RoomEvent.ActiveSpeakersChanged, (speakers) => {
+      const active = new Set(speakers.map(s => s.sid || s.participant?.sid));
+      for (const r of roster.values()) r.speaking = active.has(r.sid);
+      renderPeers();
+    });
+
+
+    // Connection lifecycle
+    room.on(LiveKit.RoomEvent.Connected, () => {
+      // Reset roster on fresh connect so we don’t carry stale entries across rooms
+      roster = new Map();
+      if (room.localParticipant) {
+        roster.set(room.localParticipant.sid, {
+          sid: room.localParticipant.sid,
+          identity: room.localParticipant.identity,
+          isLocal: true,
+          speaking: false,
+        });
+      }
+      renderPeers();
+    });
+
+    room.on(LiveKit.RoomEvent.Reconnected, () => renderPeers());
+    room.on(LiveKit.RoomEvent.Disconnected, () => { roster = new Map(); renderPeers(); });
 
     // Optional: if you later add display names/metadata, re-render on change
     // room.on(LiveKit.RoomEvent.ParticipantMetadataChanged, () => renderPeers());
 
-    // Media subscription just to ensure remote audio actually plays
-    // 🔧 ALSO refresh on media events; some SDK builds don’t emit ParticipantConnected
+
+    // Media (some builds won’t fire ParticipantConnected reliably, but TrackSubscribed will)
     room.on(LiveKit.RoomEvent.TrackSubscribed, (track, pub, participant) => {
-      console.log('TrackSubscribed from', participant.identity, pub.kind);
-      try {
-        const el = track.attach();
-        el.style.display = 'none';
-        document.body.appendChild(el);
-      } catch {}
-      renderPeers(); // ⬅️ update roster
+      // Ensure they’re in the roster
+      if (participant?.sid) {
+        roster.set(participant.sid, {
+          sid: participant.sid,
+          identity: participant.identity,
+          isLocal: false,
+          speaking: false,
+        });
+      }
+      // Attach audio so you can hear them
+      try { const el = track.attach(); el.style.display = 'none'; document.body.appendChild(el); } catch { }
+      renderPeers();
     });
 
     room.on(LiveKit.RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
-      console.log('TrackUnsubscribed from', participant?.identity, pub?.kind);
-      try { track.detach().forEach(el => el.remove()); } catch {}
-      renderPeers(); // ⬅️ update roster
+      try { track.detach().forEach(el => el.remove()); } catch { }
+      renderPeers();
     });
 
     room.on(LiveKit.RoomEvent.AudioPlaybackStatusChanged, async () => {
@@ -358,6 +481,7 @@ async function connectRoom() {
     });
 
     await room.connect(serverUrl, token, { autoSubscribe: true });
+    renderPeers();
     log('Connected to LiveKit');
 
     const initialPct = parseInt(micGain.value, 10) || 100;
@@ -389,7 +513,7 @@ async function connectRoom() {
 channelSelect.addEventListener('change', async () => {
   // If not connected yet and auto-connect is on, just connect.
   if (!room) {
-    if (autoChk?.checked) connectRoom().catch(()=>{});
+    if (autoChk?.checked) connectRoom().catch(() => { });
     return;
   }
 
@@ -398,7 +522,7 @@ channelSelect.addEventListener('change', async () => {
     statusEl.textContent = `Switching to ${roomNameFromChannel()}...`;
     await cleanupLocalMedia();
     await room.disconnect(true); // true = stop all local tracks
-  } catch (_) {}
+  } catch (_) { }
   room = null;
   connectBtn.disabled = true;
   try {
@@ -454,7 +578,7 @@ spkSelect.addEventListener('change', async () => {
 autoChk.addEventListener('change', async () => {
   await saveAutoConnect(autoChk.checked);
   if (autoChk.checked && !room) {
-    connectRoom().catch(() => {});
+    connectRoom().catch(() => { });
   }
 });
 
@@ -462,8 +586,12 @@ autoChk.addEventListener('change', async () => {
 (async () => {
   populateChannels();
   await populateDeviceLists().catch(e => log('populateDeviceLists error:', e));
-  await loadSavedMicGain().catch(() => {});
+  await loadSavedMicGain().catch(() => { });
   const autoOn = await loadSavedAutoConnect();
+
+  // Ensure username exists BEFORE autoconnect
+  const identity = await getOrAskUsername();
+  if (whoami) whoami.textContent = `Signed in as: ${identity}`;
 
   // Version badge
   try {

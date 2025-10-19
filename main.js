@@ -13,6 +13,8 @@ const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 
 function readSettings() {
   try {
+    // Print the SETTINGS_PATH for debugging
+    console.log('Reading settings from:', SETTINGS_PATH);
     return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8'));
   } catch (_) {
     return {}; // first run or invalid JSON
