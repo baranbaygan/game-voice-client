@@ -47,9 +47,9 @@ ipcMain.handle('setSetting', (_evt, { key, value }) => {
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1620,
+    width: 620,
     height: 920,
-    resizable: false,        // 👈 disables resizing
+    resizable: true,        // 👈 disables resizing
     maximizable: false,      // 👈 disables the maximize button
     fullscreenable: false,   // 👈 disables fullscreen (optional)
     icon: path.join(__dirname, 'assets/icons/png/64x64.png'),
@@ -59,7 +59,7 @@ function createWindow() {
     }
   });
   win.loadFile('index.html');
-  win.webContents.openDevTools();
+  // win.webContents.openDevTools();
 
     // --- Remove all default menus ---
   Menu.setApplicationMenu(null);
