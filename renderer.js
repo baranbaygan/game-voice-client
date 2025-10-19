@@ -16,6 +16,8 @@ const spkSelect   = document.getElementById('speakerSelect');
 const micGain     = document.getElementById('micGain');
 const micGainVal  = document.getElementById('micGainVal');
 const autoChk     = document.getElementById('autoConnect'); // <-- NEW
+const peerList    = document.getElementById('peerList');    // <-- NEW
+const channelSelect = document.getElementById('channelSelect'); // existed in HTML
 
 let room;
 let localTrack;          // LiveKit LocalAudioTrack we publish
@@ -46,7 +48,6 @@ function populateChannels() {
     opt.text = `${i}`;
     channelSelect.appendChild(opt);
   }
-  // default to 1 if nothing persisted
   if (!channelSelect.value) channelSelect.value = '1';
 }
 
@@ -161,7 +162,7 @@ async function publishProcessedTrack(deviceId, gainPercent) {
       deviceId: deviceId || undefined,
       echoCancellation: true,
       noiseSuppression: true,
-      autoGainControl: false, // we control gain with WebAudio
+      autoGainControl: false, // manual via WebAudio
     }
   };
 
@@ -200,7 +201,7 @@ function scheduleReconnect(attempt = 1) {
 
   reconnectTimer = setTimeout(async () => {
     try {
-      await connectRoom(); // will request a fresh token each time
+      await connectRoom(); // fresh token each time
       log('Reconnected via manual backoff');
     } catch (e) {
       log('Reconnect attempt failed:', e?.message || e);
@@ -208,6 +209,66 @@ function scheduleReconnect(attempt = 1) {
     }
   }, delay);
 }
+
+// ---------- Connected players (render) ----------
+function renderPeers() {
+  try {
+    if (!peerList) return;
+
+    // No room yet → clear UI
+    if (!room) {
+      peerList.innerHTML = '';
+      return;
+    }
+
+    // activeSpeakers can be Participant[] or objects with sid/participant
+    const activeSids = new Set(
+      (room.activeSpeakers || [])
+        .map(s => s?.sid || s?.participant?.sid || s?.participantSid || s?.participant?.identity || s?.identity)
+        .filter(Boolean)
+    );
+
+    // room.participants may be:
+    //  - Map<string, RemoteParticipant>
+    //  - Array<RemoteParticipant> (older client builds in some wrappers)
+    //  - undefined (race during early connect / SDK differences)
+    let remoteList = [];
+    if (room.participants && typeof room.participants.forEach === 'function') {
+      // Map-like
+      room.participants.forEach(p => remoteList.push(p));
+    } else if (Array.isArray(room.participants)) {
+      remoteList = room.participants.slice();
+    } else if (room.getParticipants && typeof room.getParticipants === 'function') {
+      // Some versions expose a getter
+      remoteList = room.getParticipants() || [];
+    } else {
+      remoteList = []; // safest fallback
+    }
+
+    function liFor(p, isLocal) {
+      const sid = p?.sid || p?.identity || '';
+      const speaking = activeSids.has(sid);
+      const classes = speaking ? 'speaking' : '';
+      const name = p?.identity ?? 'Unknown';
+      const you = isLocal ? ' (you)' : '';
+      return `<li class="${classes}" data-sid="${sid}">
+        <span class="dot"></span>
+        <span class="name">${name}${you}</span>
+      </li>`;
+    }
+
+    const items = [];
+    if (room.localParticipant) items.push(liFor(room.localParticipant, true));
+    remoteList.forEach(p => items.push(liFor(p, false)));
+
+    peerList.innerHTML = items.join('');
+  } catch (e) {
+    console.warn('renderPeers failed:', e);
+    // Don’t crash UI; just clear list
+    if (peerList) peerList.innerHTML = '';
+  }
+}
+
 
 // ---------- Connect flow ----------
 async function connectRoom() {
@@ -231,11 +292,12 @@ async function connectRoom() {
 
     room = new LiveKit.Room();
 
-    // Events
+    // ---- Room events (presence & media) ----
     room.on(LiveKit.RoomEvent.Connected, () => {
       log('RoomEvent: Connected');
       statusEl.textContent = 'Connected';
       clearReconnectTimer();
+      renderPeers(); // initial render
     });
 
     room.on(LiveKit.RoomEvent.Reconnecting, () => {
@@ -246,6 +308,7 @@ async function connectRoom() {
     room.on(LiveKit.RoomEvent.Reconnected, () => {
       log('RoomEvent: Reconnected');
       statusEl.textContent = 'Connected';
+      renderPeers();
     });
 
     room.on(LiveKit.RoomEvent.Disconnected, () => {
@@ -253,23 +316,34 @@ async function connectRoom() {
       statusEl.textContent = 'Disconnected';
       connectBtn.disabled = false;
       muteBtn.disabled = true;
+      renderPeers(); // clears list
       scheduleReconnect(1);
     });
 
-    room.on(LiveKit.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-      log('RoomEvent: TrackSubscribed', { from: participant.identity, kind: publication.kind, sid: track.sid });
+    // Presence updates:
+    room.on(LiveKit.RoomEvent.ParticipantConnected, () => renderPeers());
+    room.on(LiveKit.RoomEvent.ParticipantDisconnected, () => renderPeers());
+    room.on(LiveKit.RoomEvent.ActiveSpeakersChanged, () => renderPeers());
+
+    // Optional: if you later add display names/metadata, re-render on change
+    // room.on(LiveKit.RoomEvent.ParticipantMetadataChanged, () => renderPeers());
+
+    // Media subscription just to ensure remote audio actually plays
+    // 🔧 ALSO refresh on media events; some SDK builds don’t emit ParticipantConnected
+    room.on(LiveKit.RoomEvent.TrackSubscribed, (track, pub, participant) => {
+      console.log('TrackSubscribed from', participant.identity, pub.kind);
       try {
         const el = track.attach();
         el.style.display = 'none';
         document.body.appendChild(el);
-      } catch (e) { console.error('Attach error:', e); }
+      } catch {}
+      renderPeers(); // ⬅️ update roster
     });
 
-    room.on(LiveKit.RoomEvent.TrackUnsubscribed, (track) => {
-      log('RoomEvent: TrackUnsubscribed', track.sid);
-      try {
-        track.detach().forEach(el => el.parentNode && el.parentNode.removeChild(el));
-      } catch (e) { console.warn('Detach error:', e); }
+    room.on(LiveKit.RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
+      console.log('TrackUnsubscribed from', participant?.identity, pub?.kind);
+      try { track.detach().forEach(el => el.remove()); } catch {}
+      renderPeers(); // ⬅️ update roster
     });
 
     room.on(LiveKit.RoomEvent.AudioPlaybackStatusChanged, async () => {
@@ -296,14 +370,15 @@ async function connectRoom() {
 
     statusEl.textContent = `Connected as ${identity} in room "${roomName}"`;
     muteBtn.disabled = false;
+    renderPeers();
 
   } catch (err) {
     console.error('connectRoom error:', err);
     statusEl.textContent = 'Error: ' + (err?.message || err);
     connectBtn.disabled = false;
-    // If autoConnect is on, schedule retries
+    renderPeers();
     scheduleReconnect(1);
-    throw err; // so caller can chain retries if needed
+    throw err;
   } finally {
     connecting = false;
   }
@@ -379,7 +454,6 @@ spkSelect.addEventListener('change', async () => {
 autoChk.addEventListener('change', async () => {
   await saveAutoConnect(autoChk.checked);
   if (autoChk.checked && !room) {
-    // Optionally connect immediately when toggled on
     connectRoom().catch(() => {});
   }
 });

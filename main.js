@@ -41,21 +41,21 @@ ipcMain.handle('setSetting', (_evt, { key, value }) => {
   return true;
 });
 
-
 function createWindow() {
   const win = new BrowserWindow({
-    width: 620,
-    height: 720,
+    width: 1620,
+    height: 920,
     resizable: false,        // 👈 disables resizing
     maximizable: false,      // 👈 disables the maximize button
     fullscreenable: false,   // 👈 disables fullscreen (optional)
+    icon: path.join(__dirname, 'assets/icons/png/64x64.png'),
     webPreferences: {
       nodeIntegration: true,      // ok for dev
       contextIsolation: false     // ok for dev
     }
   });
   win.loadFile('index.html');
-  // win.webContents.openDevTools();
+  win.webContents.openDevTools();
 
     // --- Remove all default menus ---
   Menu.setApplicationMenu(null);

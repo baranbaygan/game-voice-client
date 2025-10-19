@@ -157,6 +157,32 @@
         padding: 6px 10px;
       }
 
+      /* ---- Connected players (peers) ---- */
+      .peers { margin-top: 12px; }
+      .peers h3 {
+        margin: 0 0 8px;
+        font-size: 13px; font-weight: 600; letter-spacing: .3px;
+        color: var(--muted); text-transform: uppercase;
+      }
+      .peers__list {
+        list-style: none; padding: 0; margin: 0;
+        display: flex; flex-wrap: wrap; gap: 8px;
+      }
+      .peers__list li {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 6px 10px; border: 1px solid var(--border);
+        background: #0e1116; color: var(--muted);
+        border-radius: 999px; font-size: 12px;
+      }
+      .peers__list li .dot {
+        width: 6px; height: 6px; border-radius: 50%; background: #555;
+      }
+      .peers__list li.speaking {
+        border-color: var(--accent); color: var(--text);
+      }
+      .peers__list li.speaking .dot { background: var(--ok); }
+
+
 
       .options {
         display: flex;
@@ -216,6 +242,11 @@
             </div>
           </div>
           <div id="status" class="status">Disconnected</div>
+          <div class="peers">
+            <h3>Connected players</h3>
+            <ul id="peerList" class="peers__list"></ul>
+          </div>
+
         </section>
       </div>
 
