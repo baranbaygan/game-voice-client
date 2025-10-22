@@ -495,6 +495,15 @@ async function connectRoom() {
     // Presence updates:
     room.on(LiveKit.RoomEvent.ParticipantConnected, (p) => {
       roster.set(p.sid, { sid: p.sid, identity: p.identity, isLocal: false, speaking: false });
+
+      // 🔔 Notify overlay window + sound
+      try {
+        ipcRenderer.send('overlay:show', {
+          title: 'Player joined your channel',
+          body: p?.identity ? String(p.identity) : 'Unknown player'
+        });
+      } catch (_) {}
+
       renderPeers();
     });
     room.on(LiveKit.RoomEvent.ParticipantDisconnected, (p) => {
@@ -506,6 +515,16 @@ async function connectRoom() {
       }
       if (p?.sid) roster.delete(p.sid);   // <-- critical
       renderPeers();
+
+      // 🔔 Notify overlay with LEAVE variant
+      try {
+        ipcRenderer.send('overlay:show', {
+          title: 'Player left your channel',
+          body: p?.identity ? String(p.identity) : 'Unknown player',
+          variant: 'leave' // <-- tells overlay to use red dot + leave sound
+        });
+      } catch (_) {}
+
     });
 
 

@@ -1,6 +1,6 @@
 {
   "name": "game-voip-client",
-  "version": "1.6.0",
+  "version": "1.7.2",
   "main": "main.js",
   "author": "You",
   "description": "SADO team voice client",
@@ -19,6 +19,8 @@
       "main.js",
       "index.html",
       "renderer.js",
+      "overlay.html",
+      "overlay.js",
       "package.json"
     ],
     "extraResources": [],

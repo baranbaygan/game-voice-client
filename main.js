@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu  } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, screen  } = require('electron');
 const { AccessToken } = require('livekit-server-sdk');
 
 ipcMain.handle('getAppVersion', () => app.getVersion());
@@ -11,6 +11,34 @@ const path = require('path');
 
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'settings.json');
 
+let overlayWin = null;
+let mainWin = null;
+let IS_QUITTING = false;
+
+function createOverlayWindow() {
+  const { workArea } = screen.getPrimaryDisplay();
+  const w = 360, h = 96; // compact toast area
+  overlayWin = new BrowserWindow({
+    width: w,
+    height: h,
+    x: Math.round(workArea.x + workArea.width - w - 16),
+    y: Math.round(workArea.y + 16),
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    focusable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    alwaysOnTop: true,
+    type: process.platform === 'darwin' ? 'panel' : 'toolbar',
+    webPreferences: { nodeIntegration: true, contextIsolation: false }
+  });
+  overlayWin.setIgnoreMouseEvents(true, { forward: true });
+  overlayWin.loadFile('overlay.html');
+
+  overlayWin.on('closed', () => { overlayWin = null; });
+}
 
 
 function readSettings() {
@@ -32,6 +60,11 @@ function writeSettings(obj) {
   }
 }
 
+ipcMain.on('overlay:show', (_evt, payload) => {
+  if (!overlayWin) return;
+  overlayWin.webContents.send('overlay:show', payload);
+});
+
 // IPC endpoints
 ipcMain.handle('getSetting', (_evt, key) => {
   const s = readSettings();
@@ -46,7 +79,7 @@ ipcMain.handle('setSetting', (_evt, { key, value }) => {
 });
 
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWin = new BrowserWindow({
     width: 620,
     height: 920,
     resizable: true,        // 👈 disables resizing
@@ -58,11 +91,16 @@ function createWindow() {
       contextIsolation: false     // ok for dev
     }
   });
-  win.loadFile('index.html');
+  mainWin.loadFile('index.html');
   // win.webContents.openDevTools();
 
     // --- Remove all default menus ---
   Menu.setApplicationMenu(null);
+
+  // optional, if you want Ctrl+W / close button to fully quit on Windows/Linux
+  mainWin.on('close', () => {
+    if (!IS_QUITTING) app.quit();
+  });
 }
 
 ipcMain.handle('getToken', async (_evt, { identity, roomName }) => {
@@ -76,4 +114,20 @@ ipcMain.handle('getToken', async (_evt, { identity, roomName }) => {
   return await at.toJwt();
 });
 
-app.whenReady().then(createWindow);
+// destroy everything on quit
+app.on('before-quit', () => {
+  IS_QUITTING = true;
+  try {
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.destroy();
+  } catch {}
+});
+
+// quit when all windows are closed (except macOS standard behavior)
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.whenReady().then(() => {
+  createWindow();
+  createOverlayWindow();
+});
