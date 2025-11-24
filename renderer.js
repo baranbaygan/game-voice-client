@@ -364,8 +364,14 @@ function getRemoteParticipantsArray() {
 function getParticipantBySid(sid) {
   if (!room) return null;
   // Try map
-  if (room.participants?.get) return room.participants.get(sid);
-  if (room.remoteParticipants?.get) return room.remoteParticipants.get(sid);
+  if (room.participants?.get) {
+    const p = room.participants.get(sid);
+    if (p) return p;
+  }
+  if (room.remoteParticipants?.get) {
+    const p = room.remoteParticipants.get(sid);
+    if (p) return p;
+  }
 
   // Try array/object
   const all = getRemoteParticipantsArray();
@@ -458,7 +464,17 @@ function renderPeers() {
         else if (Array.isArray(p.trackPublications)) pubs.push(...p.trackPublications);
         else if (p.tracks?.values) pubs.push(...p.tracks.values());
 
-        hasScreen = pubs.some(t => (t.source === LiveKit.Track.Source.ScreenShare || t.kind === 'video') && (t.isSubscribed || t.subscribed));
+        hasScreen = pubs.some(t => {
+          const isScreen = t.source === LiveKit.Track.Source.ScreenShare || t.source === 'screen_share' || t.kind === 'video';
+          // Important: check isSubscribed. Some SDK versions might keep the pub in the list but mark it unsubscribed.
+          const isSub = t.isSubscribed === true;
+          const isMuted = t.isMuted === true;
+
+          // Debug log for each track to see why it's passing/failing
+          // console.log(`[renderPeers] Track ${t.sid}: source=${t.source}, kind=${t.kind}, sub=${t.isSubscribed}, muted=${t.isMuted}`);
+
+          return isScreen && isSub && !isMuted;
+        });
       }
     } catch (e) { console.warn('Error checking screen share:', e); }
 
@@ -466,7 +482,7 @@ function renderPeers() {
       <li class="${entry.speaking ? 'speaking' : ''}" data-sid="${entry.sid}">
         <span class="dot"></span>
         <span class="name">${entry.identity}</span>
-        ${hasScreen ? `<button class="screen-btn" data-sid="${entry.sid}" style="margin-left:8px; padding:2px 6px; font-size:10px; background:#2ecc71; border:none; color:black; cursor:pointer; border-radius:4px;">View Screen</button>` : ''}
+        ${hasScreen ? `<button class="screen-btn" data-sid="${entry.sid}" title="View Screen" style="margin-left:8px; padding:4px; background:transparent; border:none; cursor:pointer; font-size:16px;">🖥️</button>` : ''}
         <input class="peerVol" type="range" min="0" max="100" step="1"
                value="${volPct}" data-id="${identityKey}"
                style="margin-left:8px; width:110px;">
@@ -640,11 +656,32 @@ async function connectRoom() {
       renderPeers();
     });
 
+    room.on(LiveKit.RoomEvent.TrackMuted, (pub, participant) => {
+      log('TrackMuted', participant.identity, pub.kind, pub.source);
+      renderPeers();
+    });
+
+    room.on(LiveKit.RoomEvent.TrackUnmuted, (pub, participant) => {
+      log('TrackUnmuted', participant.identity, pub.kind, pub.source);
+      renderPeers();
+    });
+
+    room.on(LiveKit.RoomEvent.TrackUnpublished, (pub, participant) => {
+      console.log('TrackUnpublished', participant.identity, pub.kind, pub.source);
+      renderPeers();
+    });
+
     room.on(LiveKit.RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
-      console.log('TrackUnsubscribed from', participant?.identity, pub?.kind);
+      console.log('TrackUnsubscribed from', participant?.identity, pub?.kind, pub?.source);
+
+      // Force a re-render immediately AND after a tick to ensure state updated
+      renderPeers();
+      setTimeout(renderPeers, 100);
 
       // Detach and remove DOM nodes created for this track
       try { track.detach()?.forEach(el => { try { el.remove(); } catch { } }); } catch { }
+
+      // ... rest of cleanup ...
 
       // Clean up per-remote audio element mapping (keyed by identity, fallback sid)
       if (pub?.kind === 'audio') {
@@ -893,13 +930,30 @@ async function selectScreenSource(source) {
       video: {
         mandatory: {
           chromeMediaSource: 'desktop',
-          chromeMediaSourceId: source.id
+          chromeMediaSourceId: source.id,
+          minFrameRate: 30,
+          maxFrameRate: 60
         }
       }
     });
 
     const track = new LiveKit.LocalVideoTrack(stream.getVideoTracks()[0]);
-    await room.localParticipant.publishTrack(track, { name: 'screen_share', source: LiveKit.Track.Source.ScreenShare });
+    // Optimization: prioritize motion for gaming
+    track.mediaStreamTrack.contentHint = 'motion';
+
+    await room.localParticipant.publishTrack(track, {
+      name: 'screen_share',
+      source: LiveKit.Track.Source.ScreenShare,
+      videoEncoding: {
+        maxBitrate: 4000000, // 4 Mbps
+        maxFramerate: 60,
+      },
+      screenShareEncoding: {
+        maxBitrate: 4000000,
+        maxFramerate: 60,
+        priority: 'high',
+      }
+    });
     localScreenTrack = track;
 
     shareScreenBtn.textContent = 'Stop Sharing';
@@ -919,10 +973,23 @@ async function selectScreenSource(source) {
 }
 
 function openScreenShareWindow(sid) {
-  const p = room.participants.get(sid);
-  if (!p) return;
-  const pub = Array.from(p.trackPublications.values()).find(t => t.source === LiveKit.Track.Source.ScreenShare && t.isSubscribed);
+  console.log('openScreenShareWindow called for', sid);
+  const p = getParticipantBySid(sid);
+  if (!p) {
+    console.warn('Participant not found for sid:', sid);
+    return;
+  }
+
+  // Robust track find
+  const pubs = [];
+  if (p.trackPublications?.values) pubs.push(...p.trackPublications.values());
+  else if (Array.isArray(p.trackPublications)) pubs.push(...p.trackPublications);
+  else if (p.tracks?.values) pubs.push(...p.tracks.values());
+
+  const pub = pubs.find(t => (t.source === LiveKit.Track.Source.ScreenShare || t.kind === 'video') && (t.isSubscribed || t.subscribed));
+
   if (!pub || !pub.track) {
+    console.warn('No screen share track found for user:', p.identity);
     alert('No screen share track found for this user.');
     return;
   }
