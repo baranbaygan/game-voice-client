@@ -931,6 +931,8 @@ async function selectScreenSource(source) {
         mandatory: {
           chromeMediaSource: 'desktop',
           chromeMediaSourceId: source.id,
+          minWidth: 1920,
+          minHeight: 1080,
           minFrameRate: 30,
           maxFrameRate: 60
         }
@@ -944,12 +946,13 @@ async function selectScreenSource(source) {
     await room.localParticipant.publishTrack(track, {
       name: 'screen_share',
       source: LiveKit.Track.Source.ScreenShare,
+      simulcast: false, // Force single high-quality stream
       videoEncoding: {
-        maxBitrate: 4000000, // 4 Mbps
+        maxBitrate: 8000000, // 8 Mbps
         maxFramerate: 60,
       },
       screenShareEncoding: {
-        maxBitrate: 4000000,
+        maxBitrate: 8000000,
         maxFramerate: 60,
         priority: 'high',
       }
