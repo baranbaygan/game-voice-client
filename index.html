@@ -273,6 +273,36 @@
         .footer-space {
             height: 32px;
         }
+
+        .screen-thumb {
+            cursor: pointer;
+            border: 2px solid transparent;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #000;
+            transition: border-color 0.2s;
+        }
+
+        .screen-thumb:hover {
+            border-color: var(--accent);
+        }
+
+        .screen-thumb img {
+            width: 100%;
+            display: block;
+            object-fit: contain;
+            background: #000;
+        }
+
+        .screen-thumb .label {
+            padding: 6px;
+            font-size: 11px;
+            color: #ccc;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-align: center;
+        }
     </style>
 </head>
 
@@ -311,6 +341,22 @@
             </div>
         </div>
     </div>
+    <!-- Screen Share Selection Modal -->
+    <div id="screenShareModal"
+        style="position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.5); z-index:10002;">
+        <div
+            style="background:#0f131a; border:1px solid #2b3240; border-radius:14px; padding:18px; width:600px; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 10px 30px rgba(0,0,0,.35);">
+            <h2 style="margin:0 0 10px; font-size:16px;">Select Screen to Share</h2>
+            <div id="screenShareList"
+                style="flex:1; overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:12px; padding:4px;">
+                <!-- Thumbnails go here -->
+            </div>
+            <div style="display:flex; gap:8px; margin-top:12px; justify-content:flex-end;">
+                <button id="cancelShareBtn"
+                    style="padding:8px 12px; border-radius:10px; border:1px solid #374151; background:#1f2937; color:#e6e7ea;">Cancel</button>
+            </div>
+        </div>
+    </div>
     <div class="wrap">
         <h1>SADO Game Voice</h1>
         <p class="sub">Lightweight party voice. Pick your devices, set your level, and connect.</p>
@@ -343,6 +389,7 @@
                     <div class="actions">
                         <button id="connect" class="primary">Connect</button>
                         <button id="mute">Mute / Unmute</button>
+                        <button id="shareScreenBtn">Share Screen</button>
                     </div>
                     <div class="options">
                         <label><input type="checkbox" id="autoConnect"> Auto-connect</label>

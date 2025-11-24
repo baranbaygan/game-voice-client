@@ -1,7 +1,11 @@
-const { app, BrowserWindow, ipcMain, Menu, screen  } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, screen, desktopCapturer, systemPreferences } = require('electron');
 const { AccessToken } = require('livekit-server-sdk');
 
 ipcMain.handle('getAppVersion', () => app.getVersion());
+
+// ... (existing code)
+
+
 
 const API_KEY = 'devkey';
 const API_SECRET = 'devsecret';
@@ -94,7 +98,7 @@ function createWindow() {
   mainWin.loadFile('index.html');
   // win.webContents.openDevTools();
 
-    // --- Remove all default menus ---
+  // --- Remove all default menus ---
   Menu.setApplicationMenu(null);
 
   // optional, if you want Ctrl+W / close button to fully quit on Windows/Linux
@@ -114,12 +118,41 @@ ipcMain.handle('getToken', async (_evt, { identity, roomName }) => {
   return await at.toJwt();
 });
 
+ipcMain.handle('getScreenSources', async () => {
+  try {
+    if (process.platform === 'darwin') {
+      const status = systemPreferences.getMediaAccessStatus('screen');
+      console.log('Current screen access status:', status);
+      if (status === 'denied') {
+        throw new Error('Screen recording permission denied. Please enable it in System Settings.');
+      }
+    }
+
+    let sources = [];
+    try {
+      sources = await desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: { width: 320, height: 180 } });
+    } catch (e) {
+      console.warn('Failed to get window+screen sources, trying screen only:', e);
+      sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 320, height: 180 } });
+    }
+
+    return sources.map(s => ({
+      id: s.id,
+      name: s.name,
+      thumbnailDataUrl: s.thumbnail.toDataURL()
+    }));
+  } catch (err) {
+    console.error('desktopCapturer.getSources failed:', err);
+    throw err;
+  }
+});
+
 // destroy everything on quit
 app.on('before-quit', () => {
   IS_QUITTING = true;
   try {
     if (overlayWin && !overlayWin.isDestroyed()) overlayWin.destroy();
-  } catch {}
+  } catch { }
 });
 
 // quit when all windows are closed (except macOS standard behavior)

@@ -27,6 +27,12 @@ const cancelChangeBtn = document.getElementById('cancelChangeBtn');
 const saveChangeBtn = document.getElementById('saveChangeBtn');
 const whoami = document.getElementById('whoami');
 
+// Screen Share UI
+const shareScreenBtn = document.getElementById('shareScreenBtn');
+const screenShareModal = document.getElementById('screenShareModal');
+const screenShareList = document.getElementById('screenShareList');
+const cancelShareBtn = document.getElementById('cancelShareBtn');
+
 if (whoami) {
   whoami.style.cursor = 'pointer';
   whoami.title = 'Click to change your username';
@@ -62,6 +68,7 @@ saveChangeBtn.addEventListener('click', async () => {
 
 let room;
 let localTrack;          // LiveKit LocalAudioTrack we publish
+let localScreenTrack;    // LiveKit LocalVideoTrack for screen share
 let rawStream;           // Raw getUserMedia stream
 let processedStream;     // Stream after WebAudio gain
 let audioCtx;
@@ -420,10 +427,16 @@ function renderPeers() {
     if (entry.isLocal) continue;
     const identityKey = entry.identity || entry.sid;
     const volPct = Math.round((remoteVolumes.get(identityKey) ?? 1) * 100);
+
+    // Check for screen share
+    const p = room.participants.get(entry.sid);
+    const hasScreen = p && Array.from(p.trackPublications.values()).some(t => t.source === LiveKit.Track.Source.ScreenShare && t.isSubscribed);
+
     items.push(`
       <li class="${entry.speaking ? 'speaking' : ''}" data-sid="${entry.sid}">
         <span class="dot"></span>
         <span class="name">${entry.identity}</span>
+        ${hasScreen ? `<button class="screen-btn" data-sid="${entry.sid}" style="margin-left:8px; padding:2px 6px; font-size:10px; background:#2ecc71; border:none; color:black; cursor:pointer; border-radius:4px;">View Screen</button>` : ''}
         <input class="peerVol" type="range" min="0" max="100" step="1"
                value="${volPct}" data-id="${identityKey}"
                style="margin-left:8px; width:110px;">
@@ -432,6 +445,14 @@ function renderPeers() {
   }
 
   peerList.innerHTML = items.join('');
+
+  // Wire up screen buttons
+  peerList.querySelectorAll('.screen-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sid = btn.getAttribute('data-sid');
+      openScreenShareWindow(sid);
+    });
+  });
 
   // sliders -> audio & persist
   peerList.querySelectorAll('input.peerVol').forEach(sl => {
@@ -502,7 +523,7 @@ async function connectRoom() {
           title: 'Player joined your channel',
           body: p?.identity ? String(p.identity) : 'Unknown player'
         });
-      } catch (_) {}
+      } catch (_) { }
 
       renderPeers();
     });
@@ -523,7 +544,7 @@ async function connectRoom() {
           body: p?.identity ? String(p.identity) : 'Unknown player',
           variant: 'leave' // <-- tells overlay to use red dot + leave sound
         });
-      } catch (_) {}
+      } catch (_) { }
 
     });
 
@@ -579,6 +600,11 @@ async function connectRoom() {
           remoteAudioEls.set(idKey, el);
           document.body.appendChild(el);
         } catch (e) { console.error('Attach error:', e); }
+      }
+
+      if (pub.source === LiveKit.Track.Source.ScreenShare) {
+        log('Screen share subscribed from', participant.identity);
+        renderPeers(); // update UI to show screen icon
       }
 
       renderPeers();
@@ -752,6 +778,153 @@ autoChk.addEventListener('change', async () => {
     connectRoom().catch(() => { });
   }
 });
+
+// ---------- Screen Share Logic ----------
+
+shareScreenBtn.addEventListener('click', async () => {
+  if (localScreenTrack) {
+    // Stop sharing
+    try {
+      await room.localParticipant.unpublishTrack(localScreenTrack);
+      localScreenTrack.stop();
+      localScreenTrack = null;
+    } catch (e) { log('Error stopping screen share:', e); }
+    shareScreenBtn.textContent = 'Share Screen';
+    shareScreenBtn.classList.remove('primary'); // revert style
+    return;
+  }
+
+  // Start sharing - show modal
+  screenShareModal.style.display = 'flex';
+  populateScreenSources();
+});
+
+cancelShareBtn.addEventListener('click', () => {
+  screenShareModal.style.display = 'none';
+});
+
+async function populateScreenSources() {
+  screenShareList.innerHTML = 'Loading...';
+  try {
+    const sources = await ipcRenderer.invoke('getScreenSources');
+    screenShareList.innerHTML = '';
+
+    sources.forEach(source => {
+      const div = document.createElement('div');
+      div.className = 'screen-thumb';
+      // We need to reconstruct the thumbnail from the native image sent over IPC if needed,
+      // but Electron's nativeImage serializes to a data URL object or similar often.
+      // Actually, nativeImage over IPC might be tricky. 
+      // Let's check if we need to serialize it in main.
+
+      // If source.thumbnail is a NativeImage, we can call toDataURL() on it.
+      // However, over IPC, it might be serialized.
+      // Let's assume standard behavior first, but to be safe, let's serialize in main.
+
+      // Wait, let's adjust main.js to return data URLs to be safe.
+
+      // For now, let's assume the previous code structure but use IPC.
+      // If the image doesn't show, we'll fix serialization.
+
+      // Actually, let's fix main.js to return simplified objects to avoid serialization issues.
+      // But for this step, let's just do the invoke.
+
+      // RE-THINK: desktopCapturer.getSources returns NativeImage objects in 'thumbnail'.
+      // Sending NativeImage over IPC is supported but can be slow or tricky.
+      // Better to serialize in main.
+
+      // Let's update this function to expect an object with dataURL.
+
+      div.onclick = () => selectScreenSource(source);
+
+      const img = document.createElement('img');
+      // If main sends dataURL directly:
+      img.src = source.thumbnailDataUrl;
+
+      const label = document.createElement('div');
+      label.className = 'label';
+      label.textContent = source.name;
+
+      div.appendChild(img);
+      div.appendChild(label);
+      screenShareList.appendChild(div);
+    });
+  } catch (e) {
+    log('Error getting sources:', e);
+    screenShareList.innerHTML = 'Error loading sources: ' + e.message;
+  }
+}
+
+async function selectScreenSource(source) {
+  screenShareModal.style.display = 'none';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: source.id
+        }
+      }
+    });
+
+    const track = new LiveKit.LocalVideoTrack(stream.getVideoTracks()[0]);
+    await room.localParticipant.publishTrack(track, { name: 'screen_share', source: LiveKit.Track.Source.ScreenShare });
+    localScreenTrack = track;
+
+    shareScreenBtn.textContent = 'Stop Sharing';
+    shareScreenBtn.classList.add('primary'); // make it distinct
+
+    // Handle track ending (e.g. user clicks "Stop sharing" in system UI)
+    track.mediaStreamTrack.onended = () => {
+      if (localScreenTrack === track) {
+        shareScreenBtn.click(); // trigger stop logic
+      }
+    };
+
+  } catch (e) {
+    log('Error sharing screen:', e);
+    alert('Failed to share screen: ' + e.message);
+  }
+}
+
+function openScreenShareWindow(sid) {
+  const p = room.participants.get(sid);
+  if (!p) return;
+  const pub = Array.from(p.trackPublications.values()).find(t => t.source === LiveKit.Track.Source.ScreenShare && t.isSubscribed);
+  if (!pub || !pub.track) {
+    alert('No screen share track found for this user.');
+    return;
+  }
+
+  const win = window.open('', `ScreenShare-${sid}`, 'width=1280,height=720,backgroundColor=#000');
+  if (!win) {
+    alert('Could not open window. Check popup blockers.');
+    return;
+  }
+
+  // Setup the new window
+  win.document.title = `${p.identity}'s Screen`;
+  win.document.body.style.margin = '0';
+  win.document.body.style.background = '#000';
+  win.document.body.style.display = 'flex';
+  win.document.body.style.alignItems = 'center';
+  win.document.body.style.justifyContent = 'center';
+  win.document.body.style.height = '100vh';
+
+  const videoEl = pub.track.attach();
+  videoEl.style.maxWidth = '100%';
+  videoEl.style.maxHeight = '100%';
+  videoEl.style.width = 'auto';
+  videoEl.style.height = 'auto';
+
+  win.document.body.appendChild(videoEl);
+
+  // Handle window close
+  win.onbeforeunload = () => {
+    pub.track.detach(videoEl);
+  };
+}
 
 // ---------- Init ----------
 (async () => {
