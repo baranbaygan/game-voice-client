@@ -361,6 +361,25 @@ function getRemoteParticipantsArray() {
   return [];
 }
 
+function getParticipantBySid(sid) {
+  if (!room) return null;
+  // Try map
+  if (room.participants?.get) return room.participants.get(sid);
+  if (room.remoteParticipants?.get) return room.remoteParticipants.get(sid);
+
+  // Try array/object
+  const all = getRemoteParticipantsArray();
+  const found = all.find(p => p.sid === sid || p.identity === sid);
+  if (found) return found;
+
+  // Check local
+  if (room.localParticipant && (room.localParticipant.sid === sid || room.localParticipant.identity === sid)) {
+    return room.localParticipant;
+  }
+
+  return null;
+}
+
 // ---------- Connected players (render) ----------
 function renderPeers() {
   if (!peerList) return;
@@ -429,8 +448,19 @@ function renderPeers() {
     const volPct = Math.round((remoteVolumes.get(identityKey) ?? 1) * 100);
 
     // Check for screen share
-    const p = room.participants.get(entry.sid);
-    const hasScreen = p && Array.from(p.trackPublications.values()).some(t => t.source === LiveKit.Track.Source.ScreenShare && t.isSubscribed);
+    let hasScreen = false;
+    try {
+      const p = getParticipantBySid(entry.sid);
+      if (p) {
+        // Robust track check
+        const pubs = [];
+        if (p.trackPublications?.values) pubs.push(...p.trackPublications.values());
+        else if (Array.isArray(p.trackPublications)) pubs.push(...p.trackPublications);
+        else if (p.tracks?.values) pubs.push(...p.tracks.values());
+
+        hasScreen = pubs.some(t => (t.source === LiveKit.Track.Source.ScreenShare || t.kind === 'video') && (t.isSubscribed || t.subscribed));
+      }
+    } catch (e) { console.warn('Error checking screen share:', e); }
 
     items.push(`
       <li class="${entry.speaking ? 'speaking' : ''}" data-sid="${entry.sid}">
