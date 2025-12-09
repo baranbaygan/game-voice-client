@@ -1,6 +1,6 @@
 {
   "name": "game-voip-client",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "main": "main.js",
   "author": "You",
   "description": "SADO team voice client",
@@ -25,7 +25,10 @@
     ],
     "extraResources": [],
     "win": {
-      "target": ["nsis", "portable"],
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "assets/icons/png/64x64.png"
     },
     "nsis": {
@@ -35,12 +38,13 @@
     },
     "mac": {
       "category": "public.app-category.utilities",
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "icon": "build/icon.icns"
     }
   },
   "dependencies": {
-
     "livekit-client": "^2.0.0",
     "livekit-server-sdk": "^2.3.0"
   },
@@ -48,5 +52,4 @@
     "electron": "^31.0.0",
     "electron-builder": "^26.0.12"
   }
-
 }

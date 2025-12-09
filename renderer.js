@@ -1018,6 +1018,14 @@ function openScreenShareWindow(sid) {
   videoEl.style.width = 'auto';
   videoEl.style.height = 'auto';
 
+  // Optimization: Add playout delay for smoothness (buffering)
+  if (pub.track.receiver && pub.track.receiver.playoutDelayHint !== undefined) {
+    console.log('Setting playoutDelayHint to 0.5s');
+    pub.track.receiver.playoutDelayHint = 0.5;
+  } else {
+    console.warn('Could not set playoutDelayHint (receiver not found or API unsupported)');
+  }
+
   win.document.body.appendChild(videoEl);
 
   // Handle window close
