@@ -32,6 +32,12 @@ const shareScreenBtn = document.getElementById('shareScreenBtn');
 const screenShareModal = document.getElementById('screenShareModal');
 const screenShareList = document.getElementById('screenShareList');
 const cancelShareBtn = document.getElementById('cancelShareBtn');
+const tabScreens = document.getElementById('tabScreens');
+const tabWindows = document.getElementById('tabWindows');
+
+// Track current tab and cached sources
+let currentShareTab = 'screens'; // 'screens' or 'windows'
+let cachedScreenSources = [];
 
 if (whoami) {
   whoami.style.cursor = 'pointer';
@@ -870,52 +876,76 @@ cancelShareBtn.addEventListener('click', () => {
   screenShareModal.style.display = 'none';
 });
 
+// Tab switching logic
+function updateTabStyles() {
+  const activeStyle = 'flex:1; padding:8px 12px; border-radius:8px; border:1px solid #3b82f6; background:#1d4ed8; color:white; cursor:pointer; font-size:13px;';
+  const inactiveStyle = 'flex:1; padding:8px 12px; border-radius:8px; border:1px solid #374151; background:#1f2937; color:#e6e7ea; cursor:pointer; font-size:13px;';
+
+  if (currentShareTab === 'screens') {
+    tabScreens.style.cssText = activeStyle;
+    tabWindows.style.cssText = inactiveStyle;
+  } else {
+    tabScreens.style.cssText = inactiveStyle;
+    tabWindows.style.cssText = activeStyle;
+  }
+}
+
+tabScreens?.addEventListener('click', () => {
+  currentShareTab = 'screens';
+  updateTabStyles();
+  renderFilteredSources();
+});
+
+tabWindows?.addEventListener('click', () => {
+  currentShareTab = 'windows';
+  updateTabStyles();
+  renderFilteredSources();
+});
+
+function renderFilteredSources() {
+  screenShareList.innerHTML = '';
+
+  // Filter sources based on current tab
+  // Electron desktop capturer: screen IDs start with "screen:", window IDs start with "window:"
+  const filtered = cachedScreenSources.filter(source => {
+    if (currentShareTab === 'screens') {
+      return source.id.startsWith('screen:');
+    } else {
+      return source.id.startsWith('window:');
+    }
+  });
+
+  if (filtered.length === 0) {
+    screenShareList.innerHTML = `<div style="color:#9aa4b2; text-align:center; padding:20px;">No ${currentShareTab === 'screens' ? 'screens' : 'windows'} available</div>`;
+    return;
+  }
+
+  filtered.forEach(source => {
+    const div = document.createElement('div');
+    div.className = 'screen-thumb';
+    div.onclick = () => selectScreenSource(source);
+
+    const img = document.createElement('img');
+    img.src = source.thumbnailDataUrl;
+
+    const label = document.createElement('div');
+    label.className = 'label';
+    label.textContent = source.name;
+
+    div.appendChild(img);
+    div.appendChild(label);
+    screenShareList.appendChild(div);
+  });
+}
+
 async function populateScreenSources() {
   screenShareList.innerHTML = 'Loading...';
+  currentShareTab = 'screens'; // Default to screens tab
+  updateTabStyles();
+
   try {
-    const sources = await ipcRenderer.invoke('getScreenSources');
-    screenShareList.innerHTML = '';
-
-    sources.forEach(source => {
-      const div = document.createElement('div');
-      div.className = 'screen-thumb';
-      // We need to reconstruct the thumbnail from the native image sent over IPC if needed,
-      // but Electron's nativeImage serializes to a data URL object or similar often.
-      // Actually, nativeImage over IPC might be tricky. 
-      // Let's check if we need to serialize it in main.
-
-      // If source.thumbnail is a NativeImage, we can call toDataURL() on it.
-      // However, over IPC, it might be serialized.
-      // Let's assume standard behavior first, but to be safe, let's serialize in main.
-
-      // Wait, let's adjust main.js to return data URLs to be safe.
-
-      // For now, let's assume the previous code structure but use IPC.
-      // If the image doesn't show, we'll fix serialization.
-
-      // Actually, let's fix main.js to return simplified objects to avoid serialization issues.
-      // But for this step, let's just do the invoke.
-
-      // RE-THINK: desktopCapturer.getSources returns NativeImage objects in 'thumbnail'.
-      // Sending NativeImage over IPC is supported but can be slow or tricky.
-      // Better to serialize in main.
-
-      // Let's update this function to expect an object with dataURL.
-
-      div.onclick = () => selectScreenSource(source);
-
-      const img = document.createElement('img');
-      // If main sends dataURL directly:
-      img.src = source.thumbnailDataUrl;
-
-      const label = document.createElement('div');
-      label.className = 'label';
-      label.textContent = source.name;
-
-      div.appendChild(img);
-      div.appendChild(label);
-      screenShareList.appendChild(div);
-    });
+    cachedScreenSources = await ipcRenderer.invoke('getScreenSources');
+    renderFilteredSources();
   } catch (e) {
     log('Error getting sources:', e);
     screenShareList.innerHTML = 'Error loading sources: ' + e.message;

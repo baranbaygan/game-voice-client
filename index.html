@@ -347,6 +347,17 @@
         <div
             style="background:#0f131a; border:1px solid #2b3240; border-radius:14px; padding:18px; width:600px; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 10px 30px rgba(0,0,0,.35);">
             <h2 style="margin:0 0 10px; font-size:16px;">Select Screen to Share</h2>
+            <!-- Tabs -->
+            <div id="screenShareTabs" style="display:flex; gap:4px; margin-bottom:12px;">
+                <button id="tabScreens" class="share-tab active"
+                    style="flex:1; padding:8px 12px; border-radius:8px; border:1px solid #3b82f6; background:#1d4ed8; color:white; cursor:pointer; font-size:13px;">
+                    🖥️ Entire Screens
+                </button>
+                <button id="tabWindows" class="share-tab"
+                    style="flex:1; padding:8px 12px; border-radius:8px; border:1px solid #374151; background:#1f2937; color:#e6e7ea; cursor:pointer; font-size:13px;">
+                    📱 Windows
+                </button>
+            </div>
             <div id="screenShareList"
                 style="flex:1; overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:12px; padding:4px;">
                 <!-- Thumbnails go here -->
