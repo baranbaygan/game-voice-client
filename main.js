@@ -160,7 +160,17 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Request microphone permission on macOS
+  if (process.platform === 'darwin') {
+    const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+    console.log('Microphone access status:', micStatus);
+    if (micStatus !== 'granted') {
+      const granted = await systemPreferences.askForMediaAccess('microphone');
+      console.log('Microphone permission granted:', granted);
+    }
+  }
+
   createWindow();
   createOverlayWindow();
 });
