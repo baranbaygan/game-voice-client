@@ -1,0 +1,13 @@
+Sample Test File
+================
+
+This is a sample text file added for testing the PM → coder → reviewers workflow.
+It intentionally contains no code and no functional changes to the project.
+
+Purpose:
+- Verify that a trivial, non-code change can be opened as a pull request.
+- Provide a target for the two independent reviewers (Codex and Claude) to score.
+
+Notes:
+- Safe to delete after the review workflow is complete.
+- Created by Game Voice PM on behalf of the operator's test request.
